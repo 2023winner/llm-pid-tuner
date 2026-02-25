@@ -1,5 +1,7 @@
 # 基于 LLM 的 PID 自动调参系统
 
+[![Star History Chart](https://api.star-history.com/svg?repos=KINGSTON-115/llm-pid-tuner&type=Date)](https://star-history.com/#KINGSTON-115/llm-pid-tuner)
+
 一个纯 CLI 的 PID 自动调参系统，支持本地仿真和真实硬件两种模式。
 
 ## 系统架构

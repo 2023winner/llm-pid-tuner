@@ -127,9 +127,9 @@ class HeatingSimulator:
         # 二阶系统：加热器温度 + 环境温度
         self.heater_temp = 20.0       # 加热器温度 (PWM 加热)
         self.ambient_temp = 20.0       # 环境温度
-        self.heater_coeff = 300.0      # 加热器加热系数 (最高可达 320°C)
-        self.heat_transfer = 0.5       # 加热器到物体的传热系数
-        self.cooling_coeff = 0.3       # 向环境散热系数
+        self.heater_coeff = 1000.0     # 加热器加热系数
+        self.heat_transfer = 3.0       # 加热器到物体的传热系数
+        self.cooling_coeff = 0.05       # 向环境散热系数
         self.noise_level = 0.3         # 传感器噪声
         
         # PID 历史值 (用于增量式/速度式)
@@ -166,7 +166,7 @@ class HeatingSimulator:
             if abs(pwm_delta) > PWM_CHANGE_MAX:
                 pid_output = self.prev_pwm + (PWM_CHANGE_MAX if pwm_delta > 0 else -PWM_CHANGE_MAX)
         
-        self.pwm = max(0, min(PWM_MAX, pid_output))  # PWM_MAX=6000 for motor, 255 for sim
+        self.pwm = max(0, min(PWM_MAX, pid_output))  # PWM限制
         self.prev_pwm = self.pwm
         
         # 更新历史值
