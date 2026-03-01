@@ -224,162 +224,107 @@ class HeatingSimulator:
 
 
 # ============================================================================
-# MiniMax API 调用
+# 调参器类 (复用 tuner.py 逻辑)
 # ============================================================================
 
-def call_llm(data_text: str, rounds: int = 1, metrics: dict = None) -> dict:
-    """调用 LLM API 分析 PID 数据 (支持 OpenAI 和 Anthropic)"""
-    
-    # 检查是否需要调用系统辨识
-    use_system_id = (rounds <= 3 and metrics.get('avg_error', 0) > 50)
-    
-    global system_id_output
-    system_id_info = ""
-    system_id_output = ""
-    if use_system_id:
-        # 自动执行系统辨识
-        print("\n[系统] 误差较大，自动执行系统辨识...")
-        import subprocess
-        try:
-            # 准备数据：time,temp,pwm 格式
-            data_str = ""
-            for d in buffer:
-                data_str += f"{int(d['timestamp'])},{d['input']:.1f},{d['pwm']:.0f} "
-            
-            result = subprocess.run(
-                ['python3', 'system_id.py', '--data', data_str],
-                capture_output=True, text=True, timeout=30,
-                cwd='/home/KINGSTON/.openclaw/workspace/llm-pid-tuner'
-            )
-            system_id_output = result.stdout
-            if result.stderr:
-                system_id_output += f"\n错误: {result.stderr}"
-            print(f"[系统辨识] 结果:\n{system_id_output[:500]}")
-            system_id_info = f"\n\n## 系统辨识结果\n{system_id_output}\n\n请根据系统辨识的Z-N建议来调整PID参数。"
-        except Exception as e:
-            print(f"[系统辨识] 错误: {e}")
-    
-    # 构建 SYSTEM_PROMPT (复用 tuner.py 的逻辑)
-    SYSTEM_PROMPT = """你是一个 PID 控制算法专家。请分析以下温度控制系统数据，判断当前 PID 参数表现并给出优化建议。
-
-## 重要约束
-- **禁止超调**：严禁让温度超过目标值，一旦发现超调必须立即减小 Kp 和增大 Kd
-- **稳态优先**：优先消除稳态误差，再考虑响应速度
-- **请直接给出参数**：不要建议我运行其他脚本，直接根据你的经验给出新的 PID 参数
-- **输出格式**：只输出纯 JSON，不要有任何 Markdown 标记或解释文字
-
-## 规则
-- 震荡剧烈 → 减小 Kp 或增大 Kd
-- 响应太慢 → 增大 Kp（可以大胆增加，如 +50%）
-- 稳态误差 → 增大 Ki（可以大胆增加，如 +50%）
-- 超调过大 → 大幅减小 Kp（至少减少 30%）和增大 Kd（至少增加 50%）"""
-
-    user_prompt = f"""{data_text}
-
-请直接返回 JSON 格式:
-{{"analysis": "简短分析原因", "p": 数值, "i": 数值, "d": 数值, "status": "TUNING"}}"""
-
-    print(f"\n[{LLM_PROVIDER}] 调用 API 中...")
-    
-    try:
-        # 识别提供商
-        provider = LLM_PROVIDER
-        if "anthropic" in API_BASE_URL.lower() or "claude" in MODEL_NAME.lower():
-            provider = "anthropic"
-
-        if provider == "openai":
-            headers = {
-                "Authorization": f"Bearer {API_KEY}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": MODEL_NAME,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.3,
-                "max_tokens": 500
-            }
-            url = f"{API_BASE_URL}/chat/completions"
-        else: # anthropic
-            headers = {
-                "x-api-key": API_KEY,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": MODEL_NAME,
-                "system": SYSTEM_PROMPT,
-                "messages": [
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.3,
-                "max_tokens": 500
-            }
-            url = f"{API_BASE_URL}/messages"
-        
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
-        
-        if resp.status_code != 200:
-            print(f"[错误] API 调用失败 ({provider}): {resp.status_code} - {resp.text[:200]}")
+class BaseTuner:
+    """调参器基类，提供公共的 JSON 解析逻辑"""
+    def _parse_json_response(self, text: str) -> Optional[Dict[str, Any]]:
+        """解析返回内容中的 JSON"""
+        if not text:
             return None
-        
-        resp_data = resp.json()
-        if provider == "openai":
-            result_text = resp_data["choices"][0]["message"].get("content", "")
-            if not result_text:
-                result_text = resp_data["choices"][0]["message"].get("reasoning_content", "")
-        else:
-            result_text = resp_data["content"][0]["text"]
-        
-        print(f"[{provider}] 原始返回: {result_text[:200]}...")
-        
-        # 预处理：去掉 Markdown 代码块标记
-        result_text = result_text.replace("```json", "").replace("```", "").strip()
-        
-        # 解析 JSON (复用原有解析逻辑)
-        import re
-        
-        # 方法1: 尝试直接解析
-        try:
-            return json.loads(result_text)
-        except json.JSONDecodeError:
-            pass
-        
-        # 方法2: 提取 JSON 块（支持嵌套 - 找最外层的{}）
-        start = result_text.find('{')
-        end = result_text.rfind('}')
-        if start != -1 and end != -1 and end > start:
-            json_str = result_text[start:end+1]
+            
+        # 尝试提取 JSON 块
+        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+        if json_match:
             try:
-                parsed = json.loads(json_str)
-                if 'p' in parsed or 'i' in parsed:
-                    return parsed
+                return json.loads(json_match.group())
             except json.JSONDecodeError:
                 pass
         
-        # 方法3: 提取 key-value 对
-        p_match = re.search(r'"p"\s*:\s*([0-9.]+)', result_text)
-        i_match = re.search(r'"i"\s*:\s*([0-9.]+)', result_text)
-        d_match = re.search(r'"d"\s*:\s*([0-9.]+)', result_text)
-        
-        if p_match and i_match and d_match:
-            return {
-                "analysis": "解析成功",
-                "p": float(p_match.group(1)),
-                "i": float(i_match.group(1)),
-                "d": float(d_match.group(1)),
-                "status": "TUNING"
-            }
-        
-        print(f"[错误] 无法解析返回内容")
-        return None
-        
-    except Exception as e:
-        print(f"[错误] {e}")
-        return None
+        # 尝试直接解析整个文本
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            print(f"[ERROR] 无法解析 JSON 内容: {text[:200]}...")
+            return None
 
+class LLMTuner(BaseTuner):
+    """LLM 调参器"""
+    def __init__(self, api_key: str, base_url: str, model: str, provider: str = "openai"):
+        self.api_key = api_key
+        self.base_url = base_url
+        self.model = model
+        self.provider = provider
+        
+        if "anthropic" in base_url.lower() or "claude" in model.lower():
+            self.provider = "anthropic"
+
+    def analyze_and_suggest(self, data_text: str, system_prompt: str) -> Optional[Dict[str, Any]]:
+        """调用 LLM API"""
+        user_prompt = f"{data_text}\n\n请直接返回 JSON 格式。"
+        
+        try:
+            if self.provider == "openai":
+                headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+                payload = {
+                    "model": self.model,
+                    "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                    "temperature": 0.3, "max_tokens": 500
+                }
+                url = f"{self.base_url}/chat/completions"
+            else: # anthropic
+                headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+                payload = {
+                    "model": self.model, "system": system_prompt,
+                    "messages": [{"role": "user", "content": user_prompt}],
+                    "temperature": 0.3, "max_tokens": 500
+                }
+                url = f"{self.base_url}/messages"
+            
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            resp.raise_for_status()
+            
+            resp_data = resp.json()
+            if self.provider == "openai":
+                result_text = resp_data["choices"][0]["message"].get("content", "") or resp_data["choices"][0]["message"].get("reasoning_content", "")
+            else:
+                result_text = resp_data["content"][0]["text"]
+            
+            return self._parse_json_response(result_text)
+        except Exception as e:
+            print(f"[错误] LLM 调用失败: {e}")
+            return None
+
+# ============================================================================
+# AI 核心 Prompt 设计
+# ============================================================================
+
+SYSTEM_PROMPT = """你是一个 PID 控制算法专家，精通 PID 控制理论和自动调参技术。
+
+## 你的任务
+分析传入的时间序列数据，判断当前 PID 参数的表现并给出优化建议。
+
+## 重要约束
+- **禁止超调**：严禁让温度/位置超过目标值，一旦发现超调必须立即减小 Kp 和增大 Kd。
+- **稳态优先**：优先消除稳态误差，再考虑响应速度。
+- **输出格式**：只输出严格的 JSON 格式，严禁包含 Markdown 代码块标记或其他解释文字。
+- **参数步长**：建议每次调整幅度在 10-30% 之间，除非误差极大。
+
+## 判断逻辑
+- **震荡剧烈** (Oscillation)：error 在目标值上下大幅波动 -> 减小 Kp 或增大 Kd。
+- **响应太慢** (Slow Response)：input 接近 setpoint 速度太慢 -> 增大 Kp。
+- **稳态误差** (Steady-State Error)：长时间后误差无法归零 -> 增大 Ki。
+- **超调过大** (Overshoot)：超过目标值后回落 -> 大幅减小 Kp 或增大 Kd。
+
+## 输出 JSON 格式
+{
+  "analysis": "简短分析结论 (20字以内)",
+  "p": <float>,
+  "i": <float>,
+  "d": <float>,
+  "status": "TUNING" // 如果已收敛则返回 "DONE"
+}"""
 
 # ============================================================================
 # 数据缓冲
@@ -387,6 +332,26 @@ def call_llm(data_text: str, rounds: int = 1, metrics: dict = None) -> dict:
 
 buffer = deque(maxlen=BUFFER_SIZE)
 sim = HeatingSimulator()
+tuner = LLMTuner(API_KEY, API_BASE_URL, MODEL_NAME, LLM_PROVIDER)
+
+def call_llm(data_text: str, rounds: int = 1, metrics: dict = None) -> dict:
+    """调用 LLM API 分析 PID 数据"""
+    # 系统辨识逻辑保留
+    use_system_id = (rounds <= 3 and metrics.get('avg_error', 0) > 50)
+    global system_id_output
+    if use_system_id:
+        print("\n[系统] 误差较大，自动执行系统辨识...")
+        import subprocess
+        try:
+            data_str = "".join([f"{int(d['timestamp'])},{d['input']:.1f},{d['pwm']:.0f} " for d in buffer])
+            result = subprocess.run(['python3', 'system_id.py', '--data', data_str], capture_output=True, text=True, timeout=30)
+            system_id_output = result.stdout
+            print(f"[系统辨识] 结果:\n{system_id_output[:500]}")
+        except Exception as e:
+            print(f"[系统辨识] 错误: {e}")
+
+    print(f"\n[{tuner.provider}] 调用 API 中...")
+    return tuner.analyze_and_suggest(data_text, SYSTEM_PROMPT)
 
 
 # ============================================================================

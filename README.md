@@ -1,265 +1,109 @@
-# 基于 LLM 的 PID 自动调参系统
+# 基于 LLM 的 PID 自动调参系统 (LLM-PID-Tuner)
 
 [![Star History Chart](https://api.star-history.com/svg?repos=KINGSTON-115/llm-pid-tuner&type=Date)](https://star-history.com/#KINGSTON-115/llm-pid-tuner)
 
 > 📺 [B站教程视频](https://b23.tv/WVUuIFb) - 详细视频教程手把手教你使用
 
-一个纯 CLI 的 PID 自动调参系统，支持本地仿真和真实硬件两种模式。
+这是一个结合了大型语言模型 (LLM) 的 PID 自动调参系统。它通过分析控制系统的实时数据，利用 AI 的逻辑推理能力自动优化 PID 参数（Kp, Ki, Kd），支持**本地仿真测试**和**真实硬件调参**。
 
-## 系统架构
+---
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        本地仿真模式                               │
-│  ┌─────────────┐    API (JSON)    ┌─────────────┐              │
-│  │ simulator.py │ ───────────────► │    LLM      │              │
-│  │ (纯Python)  │ ◄─────────────── │ (MiniMax)   │              │
-│  └─────────────┘                   └─────────────┘              │
-└──────────────────────────────────────────────────────────────────┘
+## 📂 文件作用说明
 
-┌──────────────────────────────────────────────────────────────────┐
-│                        真实硬件模式                              │
-│  ┌─────────────┐    串口 (CSV)    ┌─────────────┐    API      │
-│  │   MCU       │ ───────────────► │  tuner.py   │ ───────────►│
-│  │ (firmware)  │                  │             │ ◄───────────┘│
-│  └─────────────┘                  └─────────────┘              │
-└──────────────────────────────────────────────────────────────────┘
-```
+| 文件名 | 作用 | 核心功能 |
+| :--- | :--- | :--- |
+| **`simulator.py`** | **本地仿真调参** | 无需硬件，在电脑上运行热力学模型进行 PID 算法测试和 AI 调参演示。 |
+| **`tuner.py`** | **真实硬件调参** | 电脑端上位机，通过串口与 MCU 通信，将真实传感器数据发给 AI 并更新硬件参数。 |
+| **`firmware.cpp`** | **MCU 固件** | 运行在 Arduino/ESP32 等单片机上的代码，执行 PID 控制并与 `tuner.py` 通信。 |
+| **`system_id.py`** | **系统辨识工具** | 辅助脚本，使用 Ziegler-Nichols (Z-N) 法对系统进行初步辨识，为 AI 提供参考。 |
 
-## 快速开始 (本地仿真模式)
+---
 
-### 1. 克隆项目
+## 🛠️ 使用场景指南
 
+### 场景一：我想先学习或测试 PID 算法 (无需硬件)
+*   **使用文件**：`simulator.py`
+*   **操作流程**：
+    1. 配置环境变量（API Key 等）。
+    2. 直接运行 `python simulator.py`。
+    3. 观察 AI 如何在虚拟热力学模型中一步步将温度稳定在 100°C。
+
+### 场景二：我想给我的真实设备（如 3D 打印机加热头）调参
+*   **使用文件**：`firmware.cpp` + `tuner.py`
+*   **操作流程**：
+    1. 将 `firmware.cpp` 修改并烧录到你的开发板（Arduino/ESP32 等）。
+    2. 连接开发板到电脑，确认串口号（如 COM3 或 /dev/ttyUSB0）。
+    3. 修改 `tuner.py` 中的 `SERIAL_PORT` 和 API 配置。
+    4. 运行 `python tuner.py`，AI 将接管你的硬件进行实时调参。
+
+---
+
+## 🚀 快速开始
+
+### 1. 安装依赖
 ```bash
-git clone https://github.com/KINGSTON-115/llm-pid-tuner.git
-cd llm-pid-tuner
+pip install requests serial  # 如果使用真实硬件需安装 pyserial
 ```
 
-### 2. 配置 LLM API
+### 2. 配置 LLM API (支持多种模型)
+项目支持所有 OpenAI 兼容的 API（如 GPT-4, DeepSeek, MiniMax）以及本地模型和 Claude。
 
-你可以直接编辑 `simulator.py` 或通过环境变量配置。支持 OpenAI 兼容的所有 API，包括本地模型 (Ollama, LM Studio) 和国产模型。
-
-#### 环境变量配置 (推荐)
-```bash
+**方式 A：通过环境变量配置（推荐，安全且灵活）**
+```powershell
 # Windows (PowerShell)
-$env:LLM_API_BASE_URL="http://localhost:11434/v1"  # Ollama 示例
-$env:LLM_MODEL_NAME="llama3"
-$env:LLM_API_KEY="ollama"                          # Ollama 通常不需要 key，但需提供非空字符串
+$env:LLM_API_BASE_URL="https://api.openai.com/v1"
+$env:LLM_MODEL_NAME="gpt-4"
+$env:LLM_API_KEY="your-api-key"
 
-# Linux / macOS
-export LLM_API_BASE_URL="http://localhost:11434/v1"
-export LLM_MODEL_NAME="llama3"
-export LLM_API_KEY="ollama"
+# 如果使用本地 Ollama
+$env:LLM_API_BASE_URL="http://localhost:11434/v1"
+$env:LLM_MODEL_NAME="llama3"
+$env:LLM_API_KEY="ollama"
+
+# 如果使用 Claude 原生 API
+$env:LLM_PROVIDER="anthropic"
+$env:LLM_API_BASE_URL="https://api.anthropic.com/v1"
+$env:LLM_MODEL_NAME="claude-3-5-sonnet-20240620"
 ```
 
-#### 本地模型支持说明
-| 模型工具 | 默认 API 地址 | 适配说明 |
-|----------|--------------|----------|
-| **Ollama** | `http://localhost:11434/v1` | 兼容 OpenAI 格式，推荐使用 `llama3` 或 `qwen2` |
-| **LM Studio** | `http://localhost:1234/v1` | 开启 Local Server 后即可使用 |
-| **Claude 原生** | `https://api.anthropic.com/v1` | 需设置 `LLM_PROVIDER="anthropic"`，并提供官方 API Key |
-| **昇腾 (Ascend)** | 需配合推理框架 | 如使用 `MindSpore Serving` 或 `vLLM` 部署在昇腾芯片上，提供其 OpenAI 兼容端点即可 |
+**方式 B：直接修改文件代码**
+在 `simulator.py` 或 `tuner.py` 顶部的 `全局配置` 区域直接修改变量值。
 
-### 3. 运行
-
+### 3. 运行本地仿真
 ```bash
 python simulator.py
 ```
 
-### 4. 配置目标温度
+---
 
-编辑 `simulator.py`:
+## 🤖 调参适配说明
 
-```python
-SETPOINT = 80.0    # 目标温度 (默认 100°C)
-```
+| 适配对象 | API 地址示例 | 说明 |
+| :--- | :--- | :--- |
+| **Ollama** | `http://localhost:11434/v1` | 兼容 OpenAI 格式，推荐 `llama3` 或 `qwen2` |
+| **LM Studio** | `http://localhost:1234/v1` | 开启 Local Server 后即可使用 |
+| **Claude 原生** | `https://api.anthropic.com/v1` | 需设置 `LLM_PROVIDER="anthropic"` |
+| **昇腾 (Ascend)** | 需配合推理框架 | 使用 MindSpore Serving 或 vLLM 部署后提供兼容端点 |
 
-### 5. 选择 PID 公式
+---
 
-编辑 `simulator.py` 选择 PID 公式类型:
+## 📈 AI 调参逻辑 (System Prompt)
 
-```python
-PID_FORMULA = "standard"  # 可选: standard, parallel, positional, velocity, incremental, custom
-```
+AI 调参器被赋予了专业的控制工程知识，遵循以下逻辑：
+- **震荡剧烈** (Oscillation) → 减小 Kp 或增大 Kd。
+- **响应太慢** (Slow Response) → 增大 Kp。
+- **稳态误差** (Steady-State Error) → 增大 Ki。
+- **超调过大** (Overshoot) → 大幅减小 Kp 或增大 Kd。
+- **重要原则**：**禁止超调**（在某些系统中超调可能导致损坏）且**稳态优先**。
 
-### 6. 自定义 PID 公式 (可选)
+---
 
-如果选择 `custom`，可以修改:
+## ⚠️ 注意事项
+1. **安全第一**：在真实硬件上使用时，请务必设置硬件级别的过温保护或紧急停止按钮。
+2. **串口占用**：运行 `tuner.py` 前请关闭 Arduino IDE 的串口监视器，否则会发生冲突。
+3. **收敛标准**：当误差小于 0.3°C 且稳定时，AI 会自动返回 `status: DONE` 结束调参。
 
-```python
-CUSTOM_PID_FORMULA = "kp * error + ki * integral + kd * derivative"
-```
+---
 
-可用变量: `error`, `integral`, `derivative`, `prev_error`, `prev_prev_error`, `kp`, `ki`, `kd`
-
-### PID 公式类型说明
-
-| 类型 | 说明 | 适用场景 |
-|------|------|----------|
-| `standard` | 标准位置式 PID | 多数温度控制 |
-| `parallel` | 并行 PID | 与 standard 等价 |
-| `positional` | 位置式 PID | 需要绝对输出的场景 |
-| `velocity` | 速度式 PID | 连续变化系统 |
-| `incremental` | 增量式 PID | 步进电机、阀门控制 |
-| `custom` | 自定义 | 高级用户自定义公式 |
-
-## 输出示例
-
-```
-============================================================
-开始 PID 自动调参实验 (MiniMax M2.5)
-============================================================
-
-开始采集数据 (目标温度: 100.0°C, 初始温度: 0.0°C)
-============================================================
-[数据] t=50ms T=2.5°C PWM=200.5 Error=+97.5
-[数据] t=550ms T=27.1°C PWM=77.1 Error=+72.9
-[数据] t=1050ms T=43.0°C PWM=65.0 Error=+57.0
-
-[第 1 轮] 平均误差: 71.30°C, 最大误差: 97.54°C
-
-[MiniMax] 调用 API 中...
-[MiniMax] 分析: 温度上升太慢，稳态误差极大...
-[MiniMax] 新参数: P=2.0, I=0.5, D=0.05
-```
-
-## 核心参数配置
-
-编辑 `simulator.py`:
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `SETPOINT` | 100.0 | 目标温度 (°C) |
-| `BUFFER_SIZE` | 25 | 每轮采集数据点数 |
-| `CONTROL_INTERVAL` | 0.05 | 控制周期 (秒) |
-| `MIN_ERROR_THRESHOLD` | 0.3 | 收敛阈值 (°C) |
-
-## 物理模型
-
-系统使用二阶热力学模型：
-
-```
-heater_temp: 加热器温度 (受 PWM 控制)
-     ↓ 热传导
-object_temp: 被控对象温度 (我们要控制的)
-     ↓ 散热
- ambient: 环境温度
-```
-
-加热过程：
-```python
-target_heater_temp = ambient + (pwm / 255.0) * heater_coeff
-heater_temp += (target_heater_temp - heater_temp) * 0.3  # 热惯性
-object_temp += (heater_temp - object_temp) * 0.1  # 热传导
-object_temp -= (object_temp - ambient) * 0.01  # 散热损失
-```
-
-## 真实硬件模式
-
-### 1. 上传固件
-
-将 `firmware.cpp` 编译上传到 Arduino/ESP32。
-
-### 2. 配置串口
-
-编辑 `tuner.py` 顶部的配置：
-
-```python
-# ============================================================================
-# 配置 (根据你的环境修改)
-# ============================================================================
-
-# 串口配置
-SERIAL_PORT = "COM3"        # Windows: COM3, Linux: /dev/ttyUSB0, macOS: /dev/cu.usbserial-xxx
-SERIAL_BAUD = 115200        # 波特率
-
-# API 配置
-API_URL = "http://115.190.127.51:19882/v1/chat/completions"  # 或使用其他 API
-API_KEY = "your-api-key"
-MODEL_NAME = "MiniMax-M2.5"
-```
-
-### 3. 各平台串口名称
-
-| 平台 | 示例串口 | 如何查找 |
-|------|----------|----------|
-| **Windows** | `COM3`, `COM4` | 设备管理器 → 端口 (COM 和 LPT) |
-| **Linux** | `/dev/ttyUSB0`, `/dev/ttyACM0` | `ls /dev/tty*` |
-| **macOS** | `/dev/cu.usbserial-*`, `/dev/cu.SLAB_USBtoUART` | `ls /dev/cu.*` |
-
-### 4. 运行
-
-```bash
-# Windows
-python tuner.py
-
-# Linux / macOS
-python3 tuner.py
-```
-
-### 5. 可配置参数
-
-编辑 `tuner.py` 或 `firmware.cpp` 可调整：
-
-| 参数 | 文件 | 说明 |
-|------|------|------|
-| `SERIAL_PORT` | tuner.py | 串口名称 |
-| `SERIAL_BAUD` | tuner.py | 波特率 (默认 115200) |
-| `CONTROL_INTERVAL` | firmware.cpp | 控制周期 (ms) |
-| `PWM_PIN` | firmware.cpp | PWM 输出引脚 |
-| `TEMP_SENSOR` | firmware.cpp | 温度传感器类型 |
-
-## LLM 调参逻辑
-
-LLM 根据实时数据调整 PID 参数：
-
-| 现象 | 原因 | 调整建议 |
-|------|------|----------|
-| 震荡剧烈 | Kp 过大或 Kd 过小 | 减小 P 或增大 D |
-| 响应太慢 | Kp 过小 | 增大 P |
-| 稳态误差 | Ki 过小 | 增大 I |
-| 超调过大 | Kp 过大 | 减小 P 或增大 D |
-
-## LLM 返回格式
-
-```json
-{
-  "analysis": "温度上升太慢，稳态误差极大",
-  "p": 2.0,
-  "i": 0.5,
-  "d": 0.05,
-  "status": "TUNING"
-}
-```
-
-## 依赖
-
-- Python 3.8+
-- requests
-
-安装:
-```bash
-pip install requests
-```
-
-## 文件说明
-
-| 文件 | 描述 |
-|------|------|
-| `simulator.py` | 本地仿真模式 (无需硬件) |
-| `tuner.py` | 真实硬件模式 (需要 MCU) |
-| `firmware.cpp` | MCU 端固件 |
-| `PROJECT_DOC.md` | 开发文档 |
-
-## 实验结果
-
-| 目标温度 | 最佳参数 | 平均误差 | 收敛轮次 |
-|----------|----------|----------|----------|
-| 100°C | P=2.3, I=0.8, D=0.1 | 0.45°C | 4 轮 |
-| 80°C | P=3.0, I=0.5, D=0.05 | 0.71°C | 5 轮 |
-
-## 注意事项
-
-1. **连续运行模式**: 系统不再每轮重置仿真，让温度持续运行以达到稳态
-2. **收敛判断**: 误差 < 0.3°C 时可认为已收敛
-3. **API 配置**: 确保 API 可访问，默认使用 MiniMax 国内节点
+## 📜 许可证
+[MIT License](LICENSE)

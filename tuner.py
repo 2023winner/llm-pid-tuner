@@ -28,7 +28,6 @@ import json
 import re
 import sys
 import os
-import threading
 from collections import deque
 from typing import Optional, List, Dict, Any
 
@@ -82,55 +81,31 @@ OPENCLAW_SESSION = "main"     # 使用的会话标签
 # AI 核心 Prompt 设计
 # ============================================================================
 
-SYSTEM_PROMPT = """你是一个控制算法专家，精通 PID 控制理论和自动调参技术。
+SYSTEM_PROMPT = """你是一个 PID 控制算法专家，精通 PID 控制理论和自动调参技术。
 
 ## 你的任务
-分析传入的时间序列数据（目标值 vs 实际值），判断当前 PID 参数的表现，并给出优化建议。
+分析传入的时间序列数据，判断当前 PID 参数的表现并给出优化建议。
 
-## 数据格式
-- setpoint: 目标值 (期望温度/位置等)
-- input: 实际值 (当前温度/位置等)
-- pwm: 控制输出 (PWM 占空比)
-- error: 误差 (setpoint - input)
+## 重要约束
+- **禁止超调**：严禁让温度/位置超过目标值，一旦发现超调必须立即减小 Kp 和增大 Kd。
+- **稳态优先**：优先消除稳态误差，再考虑响应速度。
+- **输出格式**：只输出严格的 JSON 格式，严禁包含 Markdown 代码块标记或其他解释文字。
+- **参数步长**：建议每次调整幅度在 10-30% 之间，除非误差极大。
 
 ## 判断逻辑
+- **震荡剧烈** (Oscillation)：error 在目标值上下大幅波动 -> 减小 Kp 或增大 Kd。
+- **响应太慢** (Slow Response)：input 接近 setpoint 速度太慢 -> 增大 Kp。
+- **稳态误差** (Steady-State Error)：长时间后误差无法归零 -> 增大 Ki。
+- **超调过大** (Overshoot)：超过目标值后回落 -> 大幅减小 Kp 或增大 Kd。
 
-### 1. 震荡剧烈 (Oscillation)
-特征：error 在目标值上下大幅波动，形成周期性震荡
-操作：减小 Kp 或增大 Kd
-
-### 2. 响应太慢 / 上升时间长 (Slow Response)
-特征：input 接近 setpoint 的速度太慢
-操作：增大 Kp
-
-### 3. 稳态误差 (Steady-State Error)
-特征：长时间后 error 始终存在，无法归零
-操作：增大 Ki
-
-### 4. 超调过大 (Overshoot)
-特征：input 超过 setpoint 后才回落
-操作：减小 Kp 或增大 Kd
-
-### 5. 响应正常 (Good)
-特征：error 快速趋于 0，无超调或超调很小
-操作：保持当前参数或微调
-
-## 输出格式要求
-你必须返回严格的 JSON 格式，严禁包含 Markdown 代码块标记或其他废话：
-
+## 输出 JSON 格式
 {
-  "analysis": "简短的分析结论（20字以内）",
+  "analysis": "简短分析结论 (20字以内)",
   "p": <float>,
   "i": <float>,
   "d": <float>,
-  "status": "TUNING"  // 如果误差极小且稳定则返回 "DONE"
-}
-
-## 重要约束
-1. 只返回 JSON，不要有任何解释或多余文本
-2. p, i, d 必须是可以实际使用的浮点数
-3. 如果当前参数已经很好，返回 "status": "DONE"
-4. 每次参数变化不要太大，建议每次调整 10-20%"""
+  "status": "TUNING" // 如果已收敛则返回 "DONE"
+}"""
 
 # ============================================================================
 # 数据缓冲类
@@ -210,10 +185,36 @@ class DataBuffer:
 
 
 # ============================================================================
+# 调参器基类
+# ============================================================================
+
+class BaseTuner:
+    """调参器基类，提供公共的 JSON 解析逻辑"""
+    def _parse_json_response(self, text: str) -> Optional[Dict[str, Any]]:
+        """解析返回内容中的 JSON"""
+        if not text:
+            return None
+            
+        # 尝试提取 JSON 块
+        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
+        
+        # 尝试直接解析整个文本
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            print(f"[ERROR] 无法解析 JSON 内容: {text[:200]}...")
+            return None
+
+# ============================================================================
 # LLM 接口类
 # ============================================================================
 
-class LLMTuner:
+class LLMTuner(BaseTuner):
     """
     LLM 调参器
     负责调用 LLM API 并解析返回的 JSON
@@ -336,36 +337,16 @@ class LLMTuner:
         except Exception as e:
             print(f"[ERROR] LLM 调用失败 ({self.provider}): {e}")
             return None
-    
-    def _parse_json_response(self, text: str) -> Optional[Dict[str, Any]]:
-        """解析 LLM 返回的 JSON"""
-        # 尝试提取 JSON 块
-        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group())
-            except json.JSONDecodeError:
-                pass
-        
-        # 尝试直接解析整个文本
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            print(f"[ERROR] 无法解析 LLM 返回的 JSON: {text}")
-            return None
 
 
 # ============================================================================
 # OpenClaw 调参器类
 # ============================================================================
 
-class OpenClawTuner:
+class OpenClawTuner(BaseTuner):
     """
     OpenClaw 本地调参器
     通过 CLI 调用本地 OpenClaw 来分析 PID 数据
-    
-    【数据流】
-    Python -> OpenClaw CLI (消息) -> OpenClaw (LLM 分析) -> 返回 JSON -> Python
     """
     def __init__(self, cli_path: str = "openclaw", session: str = "main"):
         self.cli_path = cli_path
@@ -374,35 +355,16 @@ class OpenClawTuner:
     def analyze_and_suggest(self, data_text: str) -> Optional[Dict[str, Any]]:
         """
         将数据发送给 OpenClaw，获取调参建议
-        
-        Args:
-            data_text: 格式化后的数据文本
-            
-        Returns:
-            包含新 PID 参数的字典，或 None (如果失败)
         """
         import subprocess
         
-        # 构建发送给 OpenClaw 的消息
-        openclaw_prompt = f"""你是一个 PID 控制算法专家。请分析以下温度控制系统的时间序列数据，判断当前 PID 参数的表现，并给出优化建议。
+        # 使用统一的 SYSTEM_PROMPT
+        openclaw_prompt = f"""{SYSTEM_PROMPT}
 
-## 数据格式
-- setpoint: 目标温度
-- input: 实际温度
-- pwm: 控制输出 (PWM 占空比 0-255)
-- error: 误差 (setpoint - input)
-
-## 判断规则
-- 震荡剧烈 → 减小 Kp 或增大 Kd
-- 响应太慢 → 增大 Kp  
-- 稳态误差 → 增大 Ki
-- 超调过大 → 减小 Kp 或增大 Kd
-
-## 数据内容
+## 待分析数据
 {data_text}
 
-请返回严格的 JSON 格式 (不要有 markdown 代码块):
-{{"analysis": "简短分析", "p": <float>, "i": <float>, "d": <float>, "status": "TUNING 或 DONE"}}"""
+请根据以上数据给出优化建议。"""
 
         try:
             # 调用 OpenClaw CLI
@@ -420,31 +382,13 @@ class OpenClawTuner:
                 return None
             
             # 解析返回结果
-            output = result.stdout
-            return self._parse_json_response(output)
+            return self._parse_json_response(result.stdout)
             
         except subprocess.TimeoutExpired:
             print("[ERROR] OpenClaw 调用超时")
             return None
         except Exception as e:
             print(f"[ERROR] OpenClaw 调用异常: {e}")
-            return None
-    
-    def _parse_json_response(self, text: str) -> Optional[Dict[str, Any]]:
-        """解析返回的 JSON"""
-        # 尝试提取 JSON 块
-        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group())
-            except json.JSONDecodeError:
-                pass
-        
-        # 尝试直接解析
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            print(f"[ERROR] 无法解析 OpenClaw 返回: {text[:200]}")
             return None
 
 
