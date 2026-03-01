@@ -37,19 +37,27 @@ cd llm-pid-tuner
 
 ### 2. 配置 LLM API
 
-编辑 `simulator.py` 顶部的配置：
+你可以直接编辑 `simulator.py` 或通过环境变量配置。支持 OpenAI 兼容的所有 API，包括本地模型 (Ollama, LM Studio) 和国产模型。
 
-```python
-# MiniMax API (推荐)
-API_URL = "http://115.190.127.51:19882/v1/chat/completions"
-API_KEY = "your-api-key"
-MODEL_NAME = "MiniMax-M2.5"
+#### 环境变量配置 (推荐)
+```bash
+# Windows (PowerShell)
+$env:LLM_API_BASE_URL="http://localhost:11434/v1"  # Ollama 示例
+$env:LLM_MODEL_NAME="llama3"
+$env:LLM_API_KEY="ollama"                          # Ollama 通常不需要 key，但需提供非空字符串
 
-# 或使用 OpenAI
-API_URL = "https://api.openai.com/v1/chat/completions"
-API_KEY = "sk-your-key"
-MODEL_NAME = "gpt-4"
+# Linux / macOS
+export LLM_API_BASE_URL="http://localhost:11434/v1"
+export LLM_MODEL_NAME="llama3"
+export LLM_API_KEY="ollama"
 ```
+
+#### 本地模型支持说明
+| 模型工具 | 默认 API 地址 | 适配说明 |
+|----------|--------------|----------|
+| **Ollama** | `http://localhost:11434/v1` | 兼容 OpenAI 格式，推荐使用 `llama3` 或 `qwen2` |
+| **LM Studio** | `http://localhost:1234/v1` | 开启 Local Server 后即可使用 |
+| **昇腾 (Ascend)** | 需配合推理框架 | 如使用 `MindSpore Serving` 或 `vLLM` 部署在昇腾芯片上，提供其 OpenAI 兼容端点即可 |
 
 ### 3. 运行
 
