@@ -25,10 +25,17 @@
 
 即使你没有硬件，也可以在 1 分钟内跑通演示：
 
-### 1. 环境准备
+### 1. 克隆项目并准备环境
 确保你的电脑安装了 Python 3.8+。
 ```bash
-pip install requests serial  # 安装必要的库
+# 克隆代码仓库
+git clone https://github.com/KINGSTON-115/llm-pid-tuner.git
+
+# 进入项目文件夹
+cd llm-pid-tuner
+
+# 安装必要的库
+pip install requests serial
 ```
 
 ### 2. 获取并配置 API Key
