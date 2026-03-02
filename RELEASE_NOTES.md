@@ -13,20 +13,25 @@
 
 1.  **下载**：点击下方 Assets 中的 `llm-pid-tuner.exe` 进行下载。
 2.  **准备硬件**：将您的单片机（如 Arduino, ESP32）连接到电脑。
-3.  **配置 API Key**：
-    *   **方法一（推荐）**：在 PowerShell 中设置环境变量后运行：
-        ```powershell
-        $env:LLM_API_KEY="sk-您的API密钥"
-        .\llm-pid-tuner.exe
-        ```
-    *   **方法二**：如果不想每次都输，可以在 Windows 系统的“环境变量”设置中添加 `LLM_API_KEY`。
-4.  **运行**：双击 `llm-pid-tuner.exe`。
-5.  **选择串口**：程序会显示可用串口列表，输入对应序号即可连接。
+3.  **运行**：双击 `llm-pid-tuner.exe`。
+    *   如果是首次运行，程序会自动生成一个 `config.json` 文件。
+4.  **配置**：用记事本打开 `config.json`，填入您的 API Key 和其他设置：
+    ```json
+    {
+        "SERIAL_PORT": "AUTO",
+        "BAUD_RATE": 115200,
+        "LLM_API_KEY": "sk-您的Key",
+        "LLM_API_BASE_URL": "https://api.openai.com/v1",
+        "LLM_MODEL_NAME": "gpt-4"
+    }
+    ```
+5.  **重启**：保存文件后，重新运行程序即可。
 
-## 📝 注意事项
+## 📝 配置说明
 
-*   默认波特率为 `115200`。如果您的硬件使用其他波特率，请设置环境变量 `$env:BAUD_RATE="9600"`。
-*   默认 API Base URL 为 OpenAI 官方地址。如需使用其他服务商（如 DeepSeek, MiniMax），请设置 `$env:LLM_API_BASE_URL="您的地址"`。
+*   **`SERIAL_PORT`**: 默认为 `"AUTO"`（自动扫描），也可指定如 `"COM3"`。
+*   **`LLM_API_BASE_URL`**: 支持 OpenAI, DeepSeek, MiniMax 等所有兼容 OpenAI 格式的接口。
+*   **环境变量**: 依然支持环境变量（优先级高于配置文件），方便脚本调用。
 
 ---
 *Happy Tuning!* 🎛️

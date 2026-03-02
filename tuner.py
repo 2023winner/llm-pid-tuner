@@ -31,17 +31,72 @@ from typing import Optional, List, Dict, Any
 # 全局配置 (请根据实际情况修改)
 # ============================================================================
 
-SERIAL_PORT = os.getenv("SERIAL_PORT", "COM3")
-BAUD_RATE = int(os.getenv("BAUD_RATE", "115200"))
+# 默认配置
+CONFIG = {
+    "SERIAL_PORT": "AUTO",          # "AUTO" 或具体端口号 (如 "COM3")
+    "BAUD_RATE": 115200,
+    "LLM_API_KEY": "your-api-key-here",
+    "LLM_API_BASE_URL": "https://api.openai.com/v1",
+    "LLM_MODEL_NAME": "gpt-4",
+    "LLM_PROVIDER": "openai",
+    "BUFFER_SIZE": 100,
+    "MIN_ERROR_THRESHOLD": 0.3,
+    "MAX_TUNING_ROUNDS": 50
+}
 
-API_KEY = os.getenv("LLM_API_KEY", "your-api-key-here")
-API_BASE_URL = os.getenv("LLM_API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gpt-4")
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
+def load_config():
+    """加载配置文件 config.json，如果不存在则创建"""
+    config_path = "config.json"
+    global CONFIG
+    
+    # 1. 尝试读取配置文件
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                user_config = json.load(f)
+                CONFIG.update(user_config)
+                print(f"[INFO] 已加载配置文件: {config_path}")
+        except Exception as e:
+            print(f"[WARN] 配置文件加载失败: {e}，将使用默认值。")
+    else:
+        # 2. 如果不存在，自动创建默认配置
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(CONFIG, f, indent=4, ensure_ascii=False)
+            print(f"[INFO] 未找到配置文件，已生成默认配置: {config_path}")
+            print(f"[HINT] 请打开 {config_path} 修改您的 API Key 和串口设置。")
+        except Exception as e:
+            print(f"[WARN] 无法创建配置文件: {e}")
 
-BUFFER_SIZE = 100             # 增加缓冲大小以提供更多上下文 (配合加快的采样率)
-MIN_ERROR_THRESHOLD = 0.3     # 误差阈值
-MAX_TUNING_ROUNDS = 50        # 最大调参轮数
+    # 3. 环境变量覆盖 (优先级最高)
+    for key in CONFIG:
+        env_val = os.getenv(key)
+        if env_val:
+            # 类型转换
+            if isinstance(CONFIG[key], int):
+                try:
+                    CONFIG[key] = int(env_val)
+                except: pass
+            elif isinstance(CONFIG[key], float):
+                try:
+                    CONFIG[key] = float(env_val)
+                except: pass
+            else:
+                CONFIG[key] = env_val
+
+# 加载配置
+load_config()
+
+# 应用配置到全局变量
+SERIAL_PORT = CONFIG["SERIAL_PORT"]
+BAUD_RATE = CONFIG["BAUD_RATE"]
+API_KEY = CONFIG["LLM_API_KEY"]
+API_BASE_URL = CONFIG["LLM_API_BASE_URL"]
+MODEL_NAME = CONFIG["LLM_MODEL_NAME"]
+LLM_PROVIDER = CONFIG["LLM_PROVIDER"]
+BUFFER_SIZE = CONFIG["BUFFER_SIZE"]
+MIN_ERROR_THRESHOLD = CONFIG["MIN_ERROR_THRESHOLD"]
+MAX_TUNING_ROUNDS = CONFIG["MAX_TUNING_ROUNDS"]
 
 # ============================================================================
 # 增强版 Prompt 设计
@@ -395,11 +450,12 @@ def main():
         if not sys.argv[1].startswith("-"):
              SERIAL_PORT = sys.argv[1]
     else:
-        # 否则尝试交互式选择，如果环境变量也没设置的话，或者为了用户体验更好，总是询问？
-        # 考虑到 exe 用户，总是询问比较好，除非已经设置了环境变量且看起来是有效的
-        env_port = os.getenv("SERIAL_PORT")
-        if env_port and env_port != "COM3": # "COM3" is the default in code, we ignore it
-             print(f"[INFO] 检测到环境变量 SERIAL_PORT={env_port}")
+        # 否则尝试交互式选择，如果配置文件里写了 "AUTO" 或空，则交互选择
+        # 如果配置文件里写了具体的 "COM3"，则使用配置
+        env_port = CONFIG.get("SERIAL_PORT")
+        
+        if env_port and env_port.upper() != "AUTO":
+             print(f"[INFO] 使用配置端口: {env_port}")
              use_env = input("是否使用该端口? (Y/n): ").strip().lower()
              if use_env == 'n':
                  SERIAL_PORT = select_serial_port()
